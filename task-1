@@ -1,0 +1,148 @@
+##task-1#####
+###########Build an AWS cost-effective solution to read S3 bucket files present at /out folder. Monitor the incoming .txt file at /out folder and execute application only after getting file at the provided location. Write a script/inline application to count the words present in the .txt file and write it in count.txt file along with the execution date. Update count.txt file to append count and store it at /count folder of S3 bucket.
+import boto3
+import os
+import datetime
+
+s3 = boto3.client('s3')
+
+def lambda_handler(event, context):
+    # Get bucket name and file key from the event
+    bucket_name = event['Records'][0]['s3']['bucket']['name']
+    file_key = event['Records'][0]['s3']['object']['key']
+   
+    # Check if the file is in the /out folder
+    if file_key.startswith('out/') and file_key.endswith('.txt'):
+        # Download the file from S3
+        temp_file = '/tmp/' + os.path.basename(file_key)
+        s3.download_file(bucket_name, file_key, temp_file)
+       
+        # Read the file and count words
+        with open(temp_file, 'r') as file:
+            file_content = file.read()
+            word_count = len(file_content.split())
+       
+        # Prepare the output for count.txt file
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        file_name = os.path.basename(file_key)  # Extract the file name
+        output = f"File: {file_name}, Word Count: {word_count}, Executed at: {current_time}\n"
+       
+        # Append to count.txt (or create if it doesn't exist)
+        count_file_key = 'count/count.txt'
+        temp_count_file = '/tmp/count.txt'
+       
+        # Download the existing count.txt if available, otherwise create a new one
+        try:
+            s3.download_file(bucket_name, count_file_key, temp_count_file)
+        except Exception as e:
+            with open(temp_count_file, 'w') as count_file:
+                count_file.write('')
+       
+        # Append the new word count and file name
+        with open(temp_count_file, 'a') as count_file:
+            count_file.write(output)
+       
+        # Upload the updated count.txt back to S3
+        s3.upload_file(temp_count_file, bucket_name, count_file_key)
+       
+        return {
+            'statusCode': 200,
+            'body': f'Word count for {file_key} appended to /count/count.txt'
+        }
+
+    else:
+        return {
+            'statusCode': 400,
+            'body': 'Invalid file or location'
+        }      
+            
+
+#######task-2############start-ec2-instance##############
+import boto3
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2', region_name='ap-south-1')  
+    
+    # Get list of all stopped instances
+    instances = ec2.describe_instances(Filters=[{
+        'Name': 'instance-state-name',
+        'Values': ['stopped']
+    }])
+    
+    # Extract instance IDs
+    instance_ids = [instance['InstanceId'] for reservation in instances['Reservations'] for instance in reservation['Instances']]
+    
+    if instance_ids:
+        # Start the instances
+        ec2.start_instances(InstanceIds=instance_ids)
+        print(f'Starting instances: {instance_ids}')
+    else:
+        print('No stopped instances found')
+
+    return {
+        'statusCode': 200,
+        'body': 'Instances started successfully'
+    }
+
+
+#############task-3##########stop-ec2-instance##############
+import boto3
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2', region_name='ap-south-1') 
+    
+    # Get list of all running instances
+    instances = ec2.describe_instances(Filters=[{
+        'Name': 'instance-state-name', 
+        'Values': ['running']
+    }])
+    
+    # Extract instance IDs
+    instance_ids = [instance['InstanceId'] for reservation in instances['Reservations'] for instance in reservation['Instances']]
+    
+    if instance_ids:
+        # Stop the instances
+        ec2.stop_instances(InstanceIds=instance_ids)
+        print(f'Stopping instances: {instance_ids}')
+    else:
+        print('No running instances found')
+
+    return {
+        'statusCode': 200,
+        'body': 'Instances stopped successfully'
+    }
+
+#############snapshot delete policy#################
+import json
+import boto3
+import datetime
+from dateutil import tz
+
+def lambda_handler(event, context):
+    # Initialize Boto3 EC2 client
+    ec2 = boto3.client('ec2')
+
+    # Get current date and time in UTC
+    current_time = datetime.datetime.now(tz.UTC)
+
+    # Set the threshold for snapshots older than 14 days
+    threshold_time = current_time - datetime.timedelta(days=14)
+
+    # Describe snapshots owned by the account
+    snapshots = ec2.describe_snapshots(OwnerIds=['self'])['Snapshots']
+
+    # Iterate over snapshots and delete those older than 14 days
+    for snapshot in snapshots:
+        snapshot_id = snapshot['SnapshotId']
+        start_time = snapshot['StartTime']
+
+        # If snapshot is older than 14 days, delete it
+        if start_time < threshold_time:
+            print(f"Deleting snapshot {snapshot_id} taken on {start_time}")
+            ec2.delete_snapshot(SnapshotId=snapshot_id)
+    
+    return {
+        'statusCode': 200,
+        'body': f"Completed snapshot cleanup. Deleted snapshots older than {threshold_time}."
+    }
+
